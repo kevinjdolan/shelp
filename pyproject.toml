@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "shelp"
+version = "0.1.0"
+description = "An AI shell helper for fish, zsh, and bash."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pydantic>=2.9",
+  "PyYAML>=6.0.2",
+  "rich>=13.9",
+]
+
+[project.scripts]
+shelp = "shelp.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
