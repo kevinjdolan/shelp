@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_TRANSLATE_HOTKEY="ctrl+g"
 DEFAULT_REPAIR_HOTKEY="ctrl+h"
+GITHUB_REPO="${SHELP_GITHUB_REPO:-kevinjdolan/shelp}"
+GITHUB_API_BASE="https://api.github.com/repos/${GITHUB_REPO}"
+SHELP_VERSION="${SHELP_VERSION:-}"
+SHELP_RELEASE_TAG=""
+SHELP_WHEEL_URL=""
 SHELP_BIN=""
 
 say() {
@@ -33,6 +37,15 @@ detect_shell() {
     fish|zsh|bash) printf '%s\n' "$shell_name" ;;
     *) printf '\n' ;;
   esac
+}
+
+ensure_curl() {
+  if command_exists curl; then
+    return 0
+  fi
+
+  error "curl is required to install shelp."
+  exit 1
 }
 
 prompt_yes_no() {
@@ -104,15 +117,7 @@ ensure_uv() {
     exit 1
   fi
 
-  if command_exists curl; then
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-  elif command_exists wget; then
-    wget -qO- https://astral.sh/uv/install.sh | sh
-  else
-    error "I need curl or wget to install uv automatically."
-    exit 1
-  fi
-
+  curl -LsSf https://astral.sh/uv/install.sh | sh
   refresh_path_for_uv
 
   if ! command_exists uv; then
@@ -121,9 +126,73 @@ ensure_uv() {
   fi
 }
 
+normalize_release_tag() {
+  local version="$1"
+  version="${version#v}"
+  printf 'v%s\n' "$version"
+}
+
+github_api_curl() {
+  local url="$1"
+  local -a args
+  args=(-fsSL -H "Accept: application/vnd.github+json")
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    args+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+  fi
+  curl "${args[@]}" "$url"
+}
+
+extract_json_string() {
+  local key="$1"
+  sed -n "s/.*\"${key}\":[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" | sed 's#\\/#/#g' | head -n 1
+}
+
+extract_wheel_url() {
+  sed -n 's/.*"browser_download_url":[[:space:]]*"\([^"]*\)".*/\1/p' \
+    | sed 's#\\/#/#g' \
+    | grep -E '/shelp-[^/]+-py3-none-any\.whl$' \
+    | head -n 1
+}
+
+resolve_release() {
+  local release_url=""
+  local release_json=""
+
+  if [[ -n "$SHELP_VERSION" ]]; then
+    release_url="${GITHUB_API_BASE}/releases/tags/$(normalize_release_tag "$SHELP_VERSION")"
+  else
+    release_url="${GITHUB_API_BASE}/releases/latest"
+  fi
+
+  say "Resolving shelp release metadata from ${GITHUB_REPO}..."
+  if ! release_json="$(github_api_curl "$release_url")"; then
+    error "Unable to fetch release metadata from GitHub."
+    exit 1
+  fi
+
+  SHELP_RELEASE_TAG="$(printf '%s\n' "$release_json" | extract_json_string tag_name || true)"
+  SHELP_WHEEL_URL="$(printf '%s\n' "$release_json" | extract_wheel_url || true)"
+
+  if [[ -z "$SHELP_RELEASE_TAG" || -z "$SHELP_WHEEL_URL" ]]; then
+    error "Could not locate a release tag and universal wheel asset for shelp."
+    exit 1
+  fi
+}
+
 install_shelp() {
+  local tmpdir=""
+  local wheel_path=""
+
+  resolve_release
+  tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/shelp-install.XXXXXX")"
+  wheel_path="${tmpdir}/${SHELP_WHEEL_URL##*/}"
+
+  say "Downloading shelp ${SHELP_RELEASE_TAG}..."
+  curl -fsSL "$SHELP_WHEEL_URL" -o "$wheel_path"
+
   say "Installing shelp with uv..."
-  uv tool install --force "$ROOT_DIR"
+  uv tool install --force "$wheel_path"
+  rm -rf "$tmpdir"
 }
 
 ensure_shelp_on_path() {
@@ -179,6 +248,7 @@ configure_detected_shell() {
 }
 
 main() {
+  ensure_curl
   ensure_uv
   install_shelp
   ensure_shelp_on_path

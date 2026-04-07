@@ -7,23 +7,36 @@
 ### Prerequisites
 
 - A Unix-like shell environment with fish, zsh, or bash
-- `git`
-- `uv` for manual installs. `./install.sh` will offer to install it if it is missing.
+- `curl`
+- `uv` for manual installs. `install.sh` will offer to install it if it is missing.
 - An API key for Gemini, OpenAI, or Anthropic
 
 ### One-Liner
 
 ```bash
-git clone https://github.com/kevinjdolan/shelp.git && cd shelp && ./install.sh
+curl -fsSL https://raw.githubusercontent.com/kevinjdolan/shelp/main/install.sh | bash
 ```
 
 The installer will:
 
 - offer to install `uv` if it is missing
+- download the latest packaged `shelp` wheel from GitHub Releases with `curl`
 - install `shelp` as a normal CLI tool with `uv`
 - make sure the `uv` tool bin directory is the place your shell expects for user-installed commands
 - offer to wire hotkeys into your current fish, zsh, or bash shell
 - recommend `Ctrl-G` for command generation and `Ctrl-H` for command repair, while letting you choose different bindings
+
+To install a specific release:
+
+```bash
+SHELP_VERSION=0.1.0 curl -fsSL https://raw.githubusercontent.com/kevinjdolan/shelp/main/install.sh | bash
+```
+
+To pass install flags through the one-liner:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kevinjdolan/shelp/main/install.sh | bash -s -- --shell zsh
+```
 
 ## Quickstart
 
@@ -61,11 +74,10 @@ Replace `zsh` with `fish` or `bash` if needed.
 
 ## Manual Install
 
-If you already have `uv`, you can install `shelp` directly from a checkout:
+If you already have `uv` and want to install from a downloaded wheel directly:
 
 ```bash
-uv tool install .
-shelp install --shell zsh
+uv tool install /path/to/shelp-0.1.0-py3-none-any.whl
 ```
 
 If you are developing on `shelp` itself and want live edits to apply immediately:
@@ -73,6 +85,8 @@ If you are developing on `shelp` itself and want live edits to apply immediately
 ```bash
 uv tool install --editable .
 ```
+
+Release artifacts are built and published through GitHub Actions as wheel and source distribution assets on each tagged release.
 
 ## macOS
 
