@@ -17,8 +17,10 @@ from .prompts import (
     FRESH_DECISION_SYSTEM_TEMPLATE,
     MESSAGE_SYSTEM_TEMPLATE,
     PREFILLED_DECISION_SYSTEM_TEMPLATE,
+    REPAIR_DECISION_SYSTEM_TEMPLATE,
 )
 from .providers import build_provider_payload, call_provider, parse_structured_output, stream_provider
+from .repair import infer_repair_target, repair_context_lines, repair_intro_message
 from .ui import TerminalUI
 from .utils import (
     build_shared_prompt_context,
@@ -138,10 +140,14 @@ def build_decision_payload(
     *,
     shared_prompt_context: str,
     prefilled: bool,
+    repair_mode: bool,
 ) -> tuple[str, dict[str, str], dict]:
-    system_prompt = (PREFILLED_DECISION_SYSTEM_TEMPLATE if prefilled else FRESH_DECISION_SYSTEM_TEMPLATE).format(
-        shared_prompt_context=shared_prompt_context,
-    )
+    if repair_mode:
+        system_prompt = REPAIR_DECISION_SYSTEM_TEMPLATE.format(shared_prompt_context=shared_prompt_context)
+    else:
+        system_prompt = (PREFILLED_DECISION_SYSTEM_TEMPLATE if prefilled else FRESH_DECISION_SYSTEM_TEMPLATE).format(
+            shared_prompt_context=shared_prompt_context,
+        )
     return build_provider_payload(
         provider_settings,
         system_prompt=system_prompt,
@@ -182,6 +188,7 @@ def decide_next_action(
     *,
     shared_prompt_context: str,
     prefilled: bool,
+    repair_mode: bool,
     ui: TerminalUI,
 ) -> dict[str, str]:
     payload = build_decision_payload(
@@ -189,6 +196,7 @@ def decide_next_action(
         history,
         shared_prompt_context=shared_prompt_context,
         prefilled=prefilled,
+        repair_mode=repair_mode,
     )
     with ui.start_processing_indicator("Thinking..."):
         response_payload = call_provider(provider_settings, payload)
@@ -203,12 +211,17 @@ def decide_next_action(
         command = normalize_command(decision.command)
         if not command:
             raise ShelpError("The model chose command mode but returned no command.", stage="extracting the proposed command")
-        return {"mode": "command", "command": command, "message_instruction": ""}
+        return {
+            "mode": "command",
+            "command": command,
+            "message_instruction": "",
+            "rationale": decision.rationale.strip(),
+        }
 
     instruction = decision.message_instruction.strip()
     if not instruction:
         instruction = "Answer briefly or ask one pointed clarifying question."
-    return {"mode": "message", "command": "", "message_instruction": instruction}
+    return {"mode": "message", "command": "", "message_instruction": instruction, "rationale": ""}
 
 
 def stream_conversational_reply(
@@ -232,15 +245,34 @@ def output_result(action: str, buffer_text: str) -> None:
     sys.stdout.write(buffer_text)
 
 
-def run_session(initial_buffer: str, provider_settings: ProviderSettings, ui: TerminalUI) -> tuple[str, str]:
+def run_session(
+    initial_buffer: str,
+    provider_settings: ProviderSettings,
+    ui: TerminalUI,
+    *,
+    session_mode: str = "default",
+) -> tuple[str, str]:
     original_buffer = initial_buffer
     history: list[dict[str, str]] = []
     recent_commands = parse_recent_commands()
+    repair_target = infer_repair_target(recent_commands, explicit_command=initial_buffer) if session_mode == "repair" else None
     cwd_filenames = list_filenames_in_cwd()
-    shared_prompt_context = build_shared_prompt_context(recent_commands, cwd_filenames)
+    shared_prompt_context = build_shared_prompt_context(
+        recent_commands,
+        cwd_filenames,
+        extra_lines=repair_context_lines(repair_target) if session_mode == "repair" else None,
+    )
     prefilled_flow = bool(initial_buffer.strip())
 
-    if prefilled_flow:
+    if session_mode == "repair":
+        if repair_target is not None:
+            ui.prefilled_line(repair_target.command)
+            ui.agent_line(repair_intro_message(repair_target))
+            pending_user_message = repair_target.command
+        else:
+            ui.agent_line("I could not find a recent command to repair. Paste the command or say what you were trying to do.")
+            pending_user_message = None
+    elif prefilled_flow:
         ui.prefilled_line(initial_buffer)
         ui.agent_line("Let me think about that...")
         pending_user_message = initial_buffer
@@ -288,7 +320,8 @@ def run_session(initial_buffer: str, provider_settings: ProviderSettings, ui: Te
                 provider_settings,
                 history,
                 shared_prompt_context=shared_prompt_context,
-                prefilled=prefilled_flow and len(history) == 1,
+                prefilled=session_mode != "repair" and prefilled_flow and len(history) == 1,
+                repair_mode=session_mode == "repair",
                 ui=ui,
             )
         except ShelpError as exc:
@@ -305,7 +338,14 @@ def run_session(initial_buffer: str, provider_settings: ProviderSettings, ui: Te
 
         if decision["mode"] == "command":
             proposed_command = decision["command"]
-            history.append({"role": "assistant", "content": f"Proposed command: {proposed_command}"})
+            rationale = decision["rationale"].strip()
+            if rationale:
+                ui.agent_line(rationale)
+
+            assistant_lines = [f"Proposed command: {proposed_command}"]
+            if rationale:
+                assistant_lines.append(f"Rationale: {rationale}")
+            history.append({"role": "assistant", "content": "\n".join(assistant_lines)})
             try:
                 review_action = ui.review_proposed_command(proposed_command)
             except ShelpError as exc:
@@ -348,7 +388,7 @@ def run_session(initial_buffer: str, provider_settings: ProviderSettings, ui: Te
             history.append({"role": "assistant", "content": assistant_message})
 
 
-def run_cli_session(initial_buffer: str) -> int:
+def run_cli_session(initial_buffer: str, *, session_mode: str = "default") -> int:
     ui = TerminalUI()
     provider_settings = resolve_provider_settings(ui)
     if not provider_settings:
@@ -357,7 +397,7 @@ def run_cli_session(initial_buffer: str) -> int:
     ui.set_provider_badge(provider_settings)
 
     try:
-        action, next_buffer = run_session(initial_buffer, provider_settings, ui)
+        action, next_buffer = run_session(initial_buffer, provider_settings, ui, session_mode=session_mode)
     except ShelpError as exc:
         for line in render_exception_report(exc):
             ui.agent_line(line, "error")

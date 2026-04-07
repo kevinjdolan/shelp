@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from shelp.config import config_path, load_config, migrate_legacy_config
+from shelp.config import config_path, load_config, migrate_legacy_config, resolve_hotkey_bindings
 
 
 def test_load_config_falls_back_to_legacy(monkeypatch, tmp_path: Path) -> None:
@@ -29,3 +29,12 @@ def test_migrate_legacy_config_writes_new_primary_path(monkeypatch, tmp_path: Pa
     assert migrated_path is not None
     assert migrated_path.exists()
     assert "openai_model: gpt-4.1-mini" in migrated_path.read_text(encoding="utf-8")
+
+
+def test_resolve_hotkey_bindings_uses_defaults_when_unset(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    bindings = resolve_hotkey_bindings({})
+
+    assert bindings.translate == "ctrl+g"
+    assert bindings.repair == "ctrl+h"

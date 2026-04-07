@@ -98,6 +98,8 @@ def list_filenames_in_cwd(limit: int = 5000) -> list[str]:
 def build_shared_prompt_context(
     recent_commands: list[tuple[int | None, str]],
     cwd_filenames: list[str],
+    *,
+    extra_lines: list[str] | None = None,
 ) -> str:
     lines = [f"- Fully qualified current working directory: {Path.cwd()}"]
 
@@ -115,6 +117,9 @@ def build_shared_prompt_context(
             lines.append(f"  - {name}")
     else:
         lines.append("- Filenames in the current working directory: no entries found")
+
+    if extra_lines:
+        lines.extend(extra_lines)
 
     return "\n".join(lines)
 

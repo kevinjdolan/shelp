@@ -26,6 +26,13 @@ def test_build_quick_action_document_contains_trigger_keystroke() -> None:
     assert 'keystroke "g" using control down' in action["ActionParameters"]["COMMAND_STRING"]
 
 
+def test_build_quick_action_document_uses_custom_hotkey() -> None:
+    payload = plistlib.loads(build_quick_action_document(hotkey="ctrl+t"))
+    action = payload["actions"][0]["action"]
+
+    assert 'keystroke "t" using control down' in action["ActionParameters"]["COMMAND_STRING"]
+
+
 def test_install_quick_action_writes_bundle(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr("shelp.macos.is_macos", lambda: True)

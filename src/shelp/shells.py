@@ -5,7 +5,9 @@ import re
 import textwrap
 from pathlib import Path
 
+from .config import resolve_hotkey_bindings
 from .errors import ShelpError
+from .hotkeys import HotkeyBindings, bash_hotkey_sequence, fish_hotkey_sequence, zsh_hotkey_sequence
 
 
 SUPPORTED_SHELLS = ("fish", "zsh", "bash")
@@ -35,12 +37,13 @@ def default_shells_to_install() -> list[str]:
 
 def shell_init(shell_name: str) -> str:
     shell_name = normalize_shell_name(shell_name)
+    hotkeys = resolve_hotkey_bindings()
     if shell_name == "fish":
-        return _fish_init()
+        return _fish_init(hotkeys)
     if shell_name == "zsh":
-        return _zsh_init()
+        return _zsh_init(hotkeys)
     if shell_name == "bash":
-        return _bash_init()
+        return _bash_init(hotkeys)
     raise ShelpError(f"Unsupported shell '{shell_name}'.")
 
 
@@ -134,8 +137,8 @@ def _write_text_if_changed(path: Path, content: str, *, force: bool = False) -> 
     return True
 
 
-def _fish_init() -> str:
-    return textwrap.dedent(
+def _fish_init(hotkeys: HotkeyBindings) -> str:
+    script = textwrap.dedent(
         r"""
         if status is-interactive
             if not set -q __shelp_fish_initialized
@@ -169,7 +172,7 @@ def _fish_init() -> str:
                     end
                 end
 
-                function __shelp_translate_buffer
+                function __shelp_run_worker --argument-names worker_mode
                     set -l instruction (commandline -b)
                     set -l stdout_file (mktemp -t shelp_stdout)
 
@@ -177,7 +180,11 @@ def _fish_init() -> str:
                     printf "\n" 1>&2
 
                     set -l recent_commands_payload (string join \x1e -- $__shelp_recent_commands)
-                    env SHELP_RECENT_COMMANDS="$recent_commands_payload" shelp session --initial-buffer "$instruction" >"$stdout_file"
+                    if test "$worker_mode" = repair
+                        env SHELP_RECENT_COMMANDS="$recent_commands_payload" shelp repair --initial-buffer "$instruction" >"$stdout_file"
+                    else
+                        env SHELP_RECENT_COMMANDS="$recent_commands_payload" shelp session --initial-buffer "$instruction" >"$stdout_file"
+                    end
                     set -l worker_status $status
                     set -l action_line (head -n 1 "$stdout_file")
                     set -l next_buffer (tail -n +2 "$stdout_file")
@@ -204,10 +211,21 @@ def _fish_init() -> str:
                     return $worker_status
                 end
 
+                function __shelp_translate_buffer
+                    __shelp_run_worker translate
+                end
+
+                function __shelp_repair_command
+                    __shelp_run_worker repair
+                end
+
                 function __shelp_bind_keys
-                    bind -M default \cg __shelp_translate_buffer
-                    bind -M insert \cg __shelp_translate_buffer
-                    bind -M visual \cg __shelp_translate_buffer
+                    bind -M default __TRANSLATE_BINDING__ __shelp_translate_buffer
+                    bind -M insert __TRANSLATE_BINDING__ __shelp_translate_buffer
+                    bind -M visual __TRANSLATE_BINDING__ __shelp_translate_buffer
+                    bind -M default __REPAIR_BINDING__ __shelp_repair_command
+                    bind -M insert __REPAIR_BINDING__ __shelp_repair_command
+                    bind -M visual __REPAIR_BINDING__ __shelp_repair_command
                 end
 
                 if functions -q fish_user_key_bindings; and not functions -q __shelp_original_fish_user_key_bindings
@@ -227,10 +245,14 @@ def _fish_init() -> str:
         end
         """
     ).lstrip("\n")
+    return script.replace("__TRANSLATE_BINDING__", fish_hotkey_sequence(hotkeys.translate)).replace(
+        "__REPAIR_BINDING__",
+        fish_hotkey_sequence(hotkeys.repair),
+    )
 
 
-def _zsh_init() -> str:
-    return textwrap.dedent(
+def _zsh_init(hotkeys: HotkeyBindings) -> str:
+    script = textwrap.dedent(
         r"""
         if [[ -o interactive && -z "${__SHELP_ZSH_INITIALIZED:-}" ]]; then
           typeset -g __SHELP_ZSH_INITIALIZED=1
@@ -258,10 +280,11 @@ def _zsh_init() -> str:
             return 0
           }
 
-          __shelp_widget() {
+          __shelp_run_worker() {
             emulate -L zsh
             setopt localoptions no_aliases
 
+            local worker_mode="$1"
             local instruction="$BUFFER"
             local stdout_file action_line next_buffer next_action recent_commands_payload worker_status
 
@@ -271,7 +294,11 @@ def _zsh_init() -> str:
             zle -I
             print -u2
 
-            SHELP_RECENT_COMMANDS="$recent_commands_payload" shelp session --initial-buffer "$instruction" >! "$stdout_file"
+            if [[ "$worker_mode" == repair ]]; then
+              SHELP_RECENT_COMMANDS="$recent_commands_payload" shelp repair --initial-buffer "$instruction" >! "$stdout_file"
+            else
+              SHELP_RECENT_COMMANDS="$recent_commands_payload" shelp session --initial-buffer "$instruction" >! "$stdout_file"
+            fi
             worker_status=$?
             action_line="$(head -n 1 "$stdout_file")"
             next_buffer="$(tail -n +2 "$stdout_file")"
@@ -302,17 +329,31 @@ def _zsh_init() -> str:
             fi
           }
 
+          __shelp_translate_widget() {
+            __shelp_run_worker translate
+          }
+
+          __shelp_repair_widget() {
+            __shelp_run_worker repair
+          }
+
           add-zsh-hook preexec __shelp_preexec
           add-zsh-hook precmd __shelp_precmd
-          zle -N __shelp_widget
-          bindkey '^G' __shelp_widget
+          zle -N __shelp_translate_widget
+          zle -N __shelp_repair_widget
+          bindkey '__TRANSLATE_BINDING__' __shelp_translate_widget
+          bindkey '__REPAIR_BINDING__' __shelp_repair_widget
         fi
         """
     ).lstrip("\n")
+    return script.replace("__TRANSLATE_BINDING__", zsh_hotkey_sequence(hotkeys.translate)).replace(
+        "__REPAIR_BINDING__",
+        zsh_hotkey_sequence(hotkeys.repair),
+    )
 
 
-def _bash_init() -> str:
-    return textwrap.dedent(
+def _bash_init(hotkeys: HotkeyBindings) -> str:
+    script = textwrap.dedent(
         r"""
         if [[ $- == *i* && -z "${__SHELP_BASH_INITIALIZED:-}" ]]; then
           __SHELP_BASH_INITIALIZED=1
@@ -372,7 +413,8 @@ def _bash_init() -> str:
             esac
           }
 
-          __shelp_widget() {
+          __shelp_run_worker() {
+            local worker_mode="$1"
             local instruction="$READLINE_LINE"
             local stdout_file action_line next_buffer next_action worker_status recent_commands_payload
             local entry separator run_status
@@ -386,7 +428,11 @@ def _bash_init() -> str:
             done
 
             printf '\n' 1>&2
-            SHELP_RECENT_COMMANDS="$recent_commands_payload" shelp session --initial-buffer "$instruction" >"$stdout_file"
+            if [[ "$worker_mode" == "repair" ]]; then
+              SHELP_RECENT_COMMANDS="$recent_commands_payload" shelp repair --initial-buffer "$instruction" >"$stdout_file"
+            else
+              SHELP_RECENT_COMMANDS="$recent_commands_payload" shelp session --initial-buffer "$instruction" >"$stdout_file"
+            fi
             worker_status=$?
             action_line="$(head -n 1 "$stdout_file")"
             next_buffer="$(tail -n +2 "$stdout_file")"
@@ -425,8 +471,21 @@ def _bash_init() -> str:
             return 0
           }
 
+          __shelp_translate_widget() {
+            __shelp_run_worker translate
+          }
+
+          __shelp_repair_widget() {
+            __shelp_run_worker repair
+          }
+
           __shelp_append_prompt_command
-          bind -x '"\C-g":__shelp_widget'
+          bind -x '"__TRANSLATE_BINDING__":__shelp_translate_widget'
+          bind -x '"__REPAIR_BINDING__":__shelp_repair_widget'
         fi
         """
     ).lstrip("\n")
+    return script.replace("__TRANSLATE_BINDING__", bash_hotkey_sequence(hotkeys.translate)).replace(
+        "__REPAIR_BINDING__",
+        bash_hotkey_sequence(hotkeys.repair),
+    )

@@ -12,6 +12,7 @@ class DecisionOutput(BaseModel):
     mode: Literal["command", "message"]
     command: str
     message_instruction: str
+    rationale: str = ""
 
 
 class ConversationalReplyOutput(BaseModel):

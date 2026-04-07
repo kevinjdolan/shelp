@@ -6,6 +6,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+from .hotkeys import DEFAULT_TRANSLATE_HOTKEY, applescript_control_key
+
 
 QUICK_ACTION_NAME = "SHelp Trigger"
 
@@ -35,12 +37,13 @@ def build_quick_action_info_plist() -> bytes:
     return plistlib.dumps(payload, fmt=plistlib.FMT_XML)
 
 
-def build_quick_action_document() -> bytes:
+def build_quick_action_document(*, hotkey: str = DEFAULT_TRANSLATE_HOTKEY) -> bytes:
+    control_key = applescript_control_key(hotkey)
     shell_script = textwrap.dedent(
-        """\
+        f"""\
         /usr/bin/osascript <<'APPLESCRIPT'
         tell application "System Events"
-            keystroke "g" using control down
+            keystroke "{control_key}" using control down
         end tell
         APPLESCRIPT
         """
@@ -156,7 +159,12 @@ def refresh_services_menu() -> None:
     )
 
 
-def install_quick_action(*, force: bool = False, refresh: bool = True) -> Path | None:
+def install_quick_action(
+    *,
+    force: bool = False,
+    refresh: bool = True,
+    hotkey: str = DEFAULT_TRANSLATE_HOTKEY,
+) -> Path | None:
     if not is_macos():
         return None
 
@@ -169,7 +177,7 @@ def install_quick_action(*, force: bool = False, refresh: bool = True) -> Path |
     document_path = resources_path / "document.wflow"
 
     info_bytes = build_quick_action_info_plist()
-    document_bytes = build_quick_action_document()
+    document_bytes = build_quick_action_document(hotkey=hotkey)
 
     if force or not info_path.exists() or info_path.read_bytes() != info_bytes:
         info_path.write_bytes(info_bytes)

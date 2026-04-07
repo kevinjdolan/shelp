@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import yaml
 
 from .errors import ShelpError
+from .hotkeys import DEFAULT_REPAIR_HOTKEY, DEFAULT_TRANSLATE_HOTKEY, HotkeyBindings, build_hotkey_bindings
 from .models import ProviderSettings
 from .utils import env_value
 
@@ -150,6 +151,21 @@ def resolve_api_key_value(config: dict[str, str], provider: str) -> str:
             return candidate
 
     return ""
+
+
+def resolve_hotkey_bindings(
+    config: dict[str, str] | None = None,
+    *,
+    translate_hotkey: str | None = None,
+    repair_hotkey: str | None = None,
+) -> HotkeyBindings:
+    active_config = load_config() if config is None else config
+    translate_value = translate_hotkey if translate_hotkey is not None else active_config.get("translate_hotkey", "").strip()
+    repair_value = repair_hotkey if repair_hotkey is not None else active_config.get("repair_hotkey", "").strip()
+    return build_hotkey_bindings(
+        translate_value or DEFAULT_TRANSLATE_HOTKEY,
+        repair_value or DEFAULT_REPAIR_HOTKEY,
+    )
 
 
 def provider_api_env_hint(provider: str) -> str:
