@@ -205,10 +205,11 @@ def build_provider_payload(
     provider = provider_settings.provider
 
     if provider == "anthropic":
+        # `temperature` is deprecated/rejected on newer Anthropic models
+        # (e.g. claude-sonnet-5), so we rely on the API default here.
         payload = {
             "model": provider_settings.model,
             "max_tokens": max_tokens,
-            "temperature": temperature,
             "system": system_prompt,
             "messages": anthropic_messages(history),
             "output_config": {
